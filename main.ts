@@ -3,13 +3,15 @@ import { kebabCase } from 'lodash';
 import * as path from 'path';
 
 interface FilenameKebabSettings {
-	onlyNotes: boolean,
+	changeFolderNames: boolean,
+	changeOtherFileNames: boolean,
 	excludeByPrefix: boolean,
 	exclusionPrefix: string,
 }
 
 const DEFAULT_SETTINGS: FilenameKebabSettings = {
-	onlyNotes: false,
+	changeFolderNames: true,
+	changeOtherFileNames: false,
 	excludeByPrefix: true,
 	exclusionPrefix: '_',
 }
@@ -27,11 +29,12 @@ export default class FilenameKebab extends Plugin {
 			})
 		);
 
-		this.registerEvent(
-			this.app.vault.on('create', async (file) => {
-				await this.updateFileName(file);
-			})
-		);
+		// breaks image embeds
+		// this.registerEvent(
+		// 	this.app.vault.on('create', async (file) => {
+		// 		await this.updateFileName(file);
+		// 	})
+		// );
 	}
 
 	async loadSettings() {
@@ -45,19 +48,38 @@ export default class FilenameKebab extends Plugin {
 	async updateFileName( file: TAbstractFile) {
 		if (this.isExcluded(file)) return;
 
-		const dir = path.parse(file.path).dir
+		const folder = path.parse(file.path).dir;
 		const fileName = path.parse(file.path).name;
 		const ext = path.parse(file.path).ext;
 
-		const newFileName = path.join(dir, `${kebabCase(fileName)}${ext}`);
-		if (file.name !== fileName) {
-			await this.app.fileManager.renameFile(file, newFileName);
+		const newFileName = path.join(folder, `${kebabCase(fileName)}${ext}`);
+
+		if (file.name !== newFileName) {
+			await this.reTryCatch(async (tries: number) => {
+				let newNewFileName = newFileName;
+				if (tries > 0) {
+					newNewFileName = `${kebabCase(fileName)}-${tries}${ext}`;
+				}
+				await this.app.vault.rename(file, newNewFileName)
+			});
+		}
+	}
+
+	async reTryCatch(callback: (tries: number) => Promise<void>, makeAttempts = 99, tries = 0): Promise<void> {
+		try {
+			return await callback(tries)
+		} catch (e) {
+			if (makeAttempts > 0) {
+				return await this.reTryCatch(callback, makeAttempts - 1, tries + 1)
+			} else {
+				throw e
+			}
 		}
 	}
 
 	isExcluded(file: TAbstractFile): boolean {
 		if (file.path.startsWith('.')) {
-			// The plugin will not try to rename UNix-style hidden files.
+			// The plugin will not try to rename Unix-style hidden files.
 			return true;
 		}
 		
@@ -65,9 +87,9 @@ export default class FilenameKebab extends Plugin {
 			return true;
 		}
 
-		if (this.settings.onlyNotes) {
-			const ext = path.parse(file.name).ext;
-			return ext !== '.md';
+		const ext:string = path.parse(file.name).ext;
+		if (!this.settings.changeFolderNames && ext == '') {
+			return true;
 		}
 
 		return false;
@@ -90,12 +112,11 @@ class FilenameKebabSettingsTab extends PluginSettingTab {
 		containerEl.createEl('h2', { text: 'Settings for Filename Kebab plugin.' });
 
 		new Setting(containerEl)
-			.setName('Only change notes')
-			.setDesc('The plugin will only change the filenames of notes.')
+			.setName('Change Folder Names')
 			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.onlyNotes)
+				.setValue(this.plugin.settings.changeFolderNames)
 				.onChange(async (value) => {
-					this.plugin.settings.onlyNotes = value;
+					this.plugin.settings.changeFolderNames = value;
 					await this.plugin.saveSettings();
 				}));
 
